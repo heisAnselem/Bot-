@@ -1,19 +1,30 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import hashlib
 import html
 import logging
 import secrets
+from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import generate_reply
 from app.config import settings
-from app.db import MessageLog, WhatsAppSession, get_db_session, init_db
+from app.db import (
+    MessageLog,
+    UserAccount,
+    UserDatabaseProfile,
+    UserToken,
+    WhatsAppSession,
+    get_db_session,
+    init_db,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +59,47 @@ class WhatsAppConnectResponse(BaseModel):
     status: str
 
 
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    email: str
+
+
+class DatabaseConnectRequest(BaseModel):
+    provider: str = Field(min_length=2, max_length=64)
+    database_url: str = Field(min_length=20, max_length=2048)
+
+
+class DatabaseProfileResponse(BaseModel):
+    provider: str
+    masked_database_url: str
+    verified: str
+
+
+class SessionRecord(BaseModel):
+    phone_number: str
+    session_id: str
+    status: str
+
+
+class UserOverviewResponse(BaseModel):
+    email: str
+    total_sessions: int
+    connected_sessions: int
+    total_messages: int
+    databases: list[DatabaseProfileResponse]
+    sessions: list[SessionRecord]
+
+
 def _normalize_phone_number(phone_number: str) -> str:
     value = phone_number.strip().replace(" ", "")
     if value.startswith("+"):
@@ -59,6 +111,13 @@ def _normalize_phone_number(phone_number: str) -> str:
     if not value.isdigit():
         raise HTTPException(status_code=400, detail="Phone number must contain only digits and optional leading +")
     return value
+
+
+def _normalize_email(value: str) -> str:
+    email = value.strip().lower()
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise HTTPException(status_code=400, detail="Invalid email address")
+    return email
 
 
 def _sender_to_phone(sender: str) -> str:
@@ -82,132 +141,389 @@ def _generate_session_id() -> str:
     )
 
 
+def _hash_password(password: str, salt: bytes | None = None) -> str:
+    active_salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), active_salt, 200_000)
+    return f"{active_salt.hex()}:{digest.hex()}"
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        salt_hex, _ = stored_hash.split(":", 1)
+        candidate = _hash_password(password, bytes.fromhex(salt_hex))
+        return secrets.compare_digest(candidate, stored_hash)
+    except ValueError:
+        return False
+
+
+def _normalize_database_url(database_url: str) -> str:
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return database_url
+
+
+def _mask_database_url(database_url: str) -> str:
+    try:
+        parts = urlsplit(database_url)
+        if not parts.hostname:
+            return "invalid-url"
+        host = parts.hostname
+        host_masked = f"***.{host.split('.', 1)[1]}" if "." in host else "***"
+        path = parts.path or ""
+        return urlunsplit((parts.scheme or "postgresql", host_masked, path, "", ""))
+    except ValueError:
+        return "invalid-url"
+
+
+async def _validate_external_database(database_url: str) -> None:
+    temp_engine = create_async_engine(_normalize_database_url(database_url))
+    try:
+        async with temp_engine.connect() as conn:
+            await conn.execute(select(1))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Could not connect to provided database URL") from exc
+    finally:
+        await temp_engine.dispose()
+
+
+def _extract_bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Authorization header must be Bearer token")
+    return token.strip()
+
+
+async def get_current_user(
+    db: AsyncSession = Depends(get_db_session), authorization: str | None = Header(default=None)
+) -> UserAccount:
+    token = _extract_bearer_token(authorization)
+    try:
+        token_row = (await db.execute(select(UserToken).where(UserToken.token == token))).scalar_one_or_none()
+        if not token_row:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        user = (await db.execute(select(UserAccount).where(UserAccount.id == token_row.user_id))).scalar_one_or_none()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.environment}
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(db: AsyncSession = Depends(get_db_session)) -> HTMLResponse:
-    db_status = "online"
-    total_sessions = 0
-    connected_sessions = 0
-    total_messages = 0
-    latest_phone = "none"
-    latest_session_id = "none"
-
-    try:
-        total_sessions = int((await db.execute(select(func.count(WhatsAppSession.id)))).scalar_one() or 0)
-        connected_sessions = int(
-            (
-                await db.execute(
-                    select(func.count(WhatsAppSession.id)).where(WhatsAppSession.status == "connected")
-                )
-            ).scalar_one()
-            or 0
-        )
-        total_messages = int((await db.execute(select(func.count(MessageLog.id)))).scalar_one() or 0)
-        latest = (
-            await db.execute(select(WhatsAppSession).order_by(WhatsAppSession.created_at.desc()).limit(1))
-        ).scalar_one_or_none()
-        if latest:
-            latest_phone = latest.phone_number
-            latest_session_id = latest.session_id
-    except SQLAlchemyError:
-        db_status = "offline"
-
+async def dashboard() -> HTMLResponse:
     escaped_prefix = html.escape(settings.command_prefix)
     escaped_bot_name = html.escape(settings.bot_name)
-    escaped_latest_phone = html.escape(latest_phone)
-    escaped_latest_session = html.escape(latest_session_id)
-    whatsapp_mode = "enabled" if settings.whatsapp_only else "disabled"
-    require_session = "enabled" if settings.require_session_id else "disabled"
-    bridge_hint = "configured" if settings.whatsapp_api_url else "not configured"
-
     page = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{escaped_bot_name} Control Panel</title>
+  <title>{escaped_bot_name} Cloud Panel</title>
   <style>
     :root {{ color-scheme: dark; font-family: Inter, system-ui, Arial, sans-serif; }}
     body {{ margin: 0; background: #0d1117; color: #e6edf3; }}
-    .wrap {{ max-width: 1100px; margin: 0 auto; padding: 24px; }}
+    .wrap {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
     h1 {{ margin-top: 0; }}
-    .grid {{ display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
     .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 16px; }}
-    .cards {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+    .cards {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }}
     .label {{ color: #8b949e; font-size: 12px; text-transform: uppercase; }}
     .value {{ font-size: 20px; font-weight: 600; margin-top: 6px; }}
     .line {{ margin: 6px 0; color: #c9d1d9; word-break: break-all; }}
     input, button {{ width: 100%; border-radius: 10px; border: 1px solid #30363d; padding: 12px; background: #0d1117; color: #e6edf3; }}
     button {{ cursor: pointer; background: #238636; border-color: #2ea043; font-weight: 600; }}
     button:hover {{ background: #2ea043; }}
-    .out {{ margin-top: 12px; background: #0d1117; border: 1px dashed #30363d; border-radius: 10px; padding: 12px; min-height: 44px; }}
+    .btn-secondary {{ background: #30363d; border-color: #484f58; }}
+    .out {{ margin-top: 12px; background: #0d1117; border: 1px dashed #30363d; border-radius: 10px; padding: 12px; min-height: 44px; white-space: pre-wrap; }}
+    .hidden {{ display: none; }}
     @media (max-width: 900px) {{ .grid {{ grid-template-columns: 1fr; }} .cards {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>{escaped_bot_name} Interface</h1>
-    <p>WhatsApp-only mode for normal WhatsApp users. Use this page to monitor runtime state and generate session IDs.</p>
-    <div class="cards">
-      <div class="card"><div class="label">Database</div><div class="value">{db_status}</div></div>
-      <div class="card"><div class="label">WhatsApp sessions</div><div class="value">{total_sessions}</div></div>
-      <div class="card"><div class="label">Connected sessions</div><div class="value">{connected_sessions}</div></div>
+    <p>Deploy on FastAPI cloud, let users login, manage sessions, and verify their own Neon/Supabase database.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Register</h3>
+        <input id="register_email" placeholder="email@example.com" />
+        <div style="height: 8px;"></div>
+        <input id="register_password" type="password" placeholder="password (min 8 chars)" />
+        <div style="height: 8px;"></div>
+        <button id="register_btn">Create account</button>
+      </div>
+      <div class="card">
+        <h3>Login</h3>
+        <input id="login_email" placeholder="email@example.com" />
+        <div style="height: 8px;"></div>
+        <input id="login_password" type="password" placeholder="password" />
+        <div style="height: 8px;"></div>
+        <button id="login_btn">Login</button>
+      </div>
     </div>
-    <div class="grid" style="margin-top:16px;">
+    <div id="workspace" class="hidden">
+      <div class="cards">
+        <div class="card"><div class="label">Sessions</div><div id="m_sessions" class="value">0</div></div>
+        <div class="card"><div class="label">Connected</div><div id="m_connected" class="value">0</div></div>
+        <div class="card"><div class="label">Messages</div><div id="m_messages" class="value">0</div></div>
+      </div>
+      <div class="grid" style="margin-top:16px;">
       <div class="card">
-        <h3>System status</h3>
-        <div class="line"><b>Bot Name:</b> {escaped_bot_name}</div>
-        <div class="line"><b>Prefix:</b> {escaped_prefix}</div>
-        <div class="line"><b>WhatsApp only:</b> {whatsapp_mode}</div>
-        <div class="line"><b>Session required:</b> {require_session}</div>
-        <div class="line"><b>Total logged messages:</b> {total_messages}</div>
-        <div class="line"><b>Latest connected phone:</b> {escaped_latest_phone}</div>
-        <div class="line"><b>Latest session id:</b> {escaped_latest_session}</div>
-        <div class="line"><b>Bridge status:</b> {bridge_hint}</div>
+        <h3>Connect your free database</h3>
+        <div class="line">Use Neon or Supabase URL. Prefix is <b>{escaped_prefix}</b> for commands.</div>
+        <input id="db_provider" placeholder="neon or supabase" />
+        <div style="height: 8px;"></div>
+        <input id="db_url" placeholder="postgresql://user:pass@host/db?sslmode=require" />
+        <div style="height: 8px;"></div>
+        <button id="db_btn">Verify & save database profile</button>
+        <div class="out" id="db_out">No database profile yet.</div>
       </div>
       <div class="card">
-        <h3>Generate session ID</h3>
-        <form id="connect-form">
-          <input id="phone_number" name="phone_number" placeholder="+2348012345678" required />
-          <div style="height: 10px;"></div>
-          <button type="submit">Connect WhatsApp</button>
-        </form>
-        <div class="out" id="output">Waiting for input…</div>
+        <h3>Generate WhatsApp session ID</h3>
+        <input id="phone_number" placeholder="+2348012345678" />
+        <div style="height: 8px;"></div>
+        <button id="session_btn">Connect WhatsApp</button>
+        <div class="out" id="session_out">Waiting for input…</div>
       </div>
+    </div>
+    <div class="card" style="margin-top:16px;">
+      <h3>Your data</h3>
+      <div class="out" id="overview_out">Login to load your workspace.</div>
+      <button id="refresh_btn" class="btn-secondary">Refresh workspace</button>
+    </div>
     </div>
   </div>
   <script>
-    const form = document.getElementById('connect-form');
-    const out = document.getElementById('output');
-    form.addEventListener('submit', async (e) => {{
-      e.preventDefault();
-      const phone_number = document.getElementById('phone_number').value.trim();
-      out.textContent = 'Generating session…';
-      try {{
-        const res = await fetch('/whatsapp/connect', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ phone_number }})
-        }});
-        const data = await res.json();
-        if (!res.ok) {{
-          out.textContent = data.detail || 'Failed to connect phone number.';
-          return;
-        }}
-        out.textContent = `Phone: ${'{'}data.phone_number{'}'}\\nSession ID: ${'{'}data.session_id{'}'}\\nStatus: ${'{'}data.status{'}'}`;
-      }} catch (err) {{
-        out.textContent = 'Network error while connecting phone number.';
+    let token = localStorage.getItem('abot_token') || '';
+    const workspace = document.getElementById('workspace');
+    const overviewOut = document.getElementById('overview_out');
+
+    const authHeaders = () => token ? {{ 'Authorization': `Bearer ${{token}}`, 'Content-Type': 'application/json' }} : {{ 'Content-Type': 'application/json' }};
+
+    async function loadOverview() {{
+      if (!token) {{
+        workspace.classList.add('hidden');
+        overviewOut.textContent = 'Login to load your workspace.';
+        return;
       }}
+      const res = await fetch('/me/overview', {{ headers: authHeaders() }});
+      const data = await res.json();
+      if (!res.ok) {{
+        workspace.classList.add('hidden');
+        overviewOut.textContent = data.detail || 'Failed to load workspace.';
+        return;
+      }}
+      workspace.classList.remove('hidden');
+      document.getElementById('m_sessions').textContent = data.total_sessions;
+      document.getElementById('m_connected').textContent = data.connected_sessions;
+      document.getElementById('m_messages').textContent = data.total_messages;
+      overviewOut.textContent = JSON.stringify(data, null, 2);
+      document.getElementById('db_out').textContent = data.databases.length ? JSON.stringify(data.databases, null, 2) : 'No database profile yet.';
+    }}
+
+    async function auth(path, email, password) {{
+      const res = await fetch(path, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ email, password }})
+      }});
+      const data = await res.json();
+      if (!res.ok) {{
+        overviewOut.textContent = data.detail || 'Authentication failed.';
+        return;
+      }}
+      token = data.token;
+      localStorage.setItem('abot_token', token);
+      await loadOverview();
+    }}
+
+    document.getElementById('register_btn').addEventListener('click', async () => {{
+      await auth('/auth/register', document.getElementById('register_email').value.trim(), document.getElementById('register_password').value);
     }});
+
+    document.getElementById('login_btn').addEventListener('click', async () => {{
+      await auth('/auth/login', document.getElementById('login_email').value.trim(), document.getElementById('login_password').value);
+    }});
+
+    document.getElementById('db_btn').addEventListener('click', async () => {{
+      const provider = document.getElementById('db_provider').value.trim();
+      const database_url = document.getElementById('db_url').value.trim();
+      const res = await fetch('/me/database/connect', {{
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({{ provider, database_url }})
+      }});
+      const data = await res.json();
+      document.getElementById('db_out').textContent = res.ok ? JSON.stringify(data, null, 2) : (data.detail || 'Database verification failed.');
+      if (res.ok) await loadOverview();
+    }});
+
+    document.getElementById('session_btn').addEventListener('click', async () => {{
+      const phone_number = document.getElementById('phone_number').value.trim();
+      const res = await fetch('/whatsapp/connect', {{
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({{ phone_number }})
+      }});
+      const data = await res.json();
+      document.getElementById('session_out').textContent = res.ok
+        ? `Phone: ${{data.phone_number}}\\nSession ID: ${{data.session_id}}\\nStatus: ${{data.status}}`
+        : (data.detail || 'Failed to connect phone.');
+      if (res.ok) await loadOverview();
+    }});
+
+    document.getElementById('refresh_btn').addEventListener('click', loadOverview);
+    loadOverview();
   </script>
 </body>
 </html>"""
 
     return HTMLResponse(content=page)
+
+
+@app.post("/auth/register", response_model=AuthResponse)
+async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_session)) -> AuthResponse:
+    email = _normalize_email(payload.email)
+    try:
+        existing = (await db.execute(select(UserAccount).where(UserAccount.email == email))).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        user = UserAccount(email=email, password_hash=_hash_password(payload.password))
+        db.add(user)
+        await db.flush()
+        token = secrets.token_urlsafe(32)
+        db.add(UserToken(user_id=user.id, token=token))
+        await db.commit()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+    return AuthResponse(token=token, email=email)
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db_session)) -> AuthResponse:
+    email = _normalize_email(payload.email)
+    try:
+        user = (await db.execute(select(UserAccount).where(UserAccount.email == email))).scalar_one_or_none()
+        if not user or not _verify_password(payload.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        await db.execute(delete(UserToken).where(UserToken.user_id == user.id))
+        token = secrets.token_urlsafe(32)
+        db.add(UserToken(user_id=user.id, token=token))
+        await db.commit()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+    return AuthResponse(token=token, email=email)
+
+
+@app.get("/me/overview", response_model=UserOverviewResponse)
+async def me_overview(
+    user: UserAccount = Depends(get_current_user), db: AsyncSession = Depends(get_db_session)
+) -> UserOverviewResponse:
+    try:
+        total_sessions = int(
+            (
+                await db.execute(
+                    select(func.count(WhatsAppSession.id)).where(WhatsAppSession.user_id == user.id)
+                )
+            ).scalar_one()
+            or 0
+        )
+        connected_sessions = int(
+            (
+                await db.execute(
+                    select(func.count(WhatsAppSession.id)).where(
+                        WhatsAppSession.user_id == user.id, WhatsAppSession.status == "connected"
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        total_messages = int(
+            ((await db.execute(select(func.count(MessageLog.id)).where(MessageLog.user_id == user.id))).scalar_one() or 0)
+        )
+        db_profiles = (
+            await db.execute(select(UserDatabaseProfile).where(UserDatabaseProfile.user_id == user.id))
+        ).scalars().all()
+        sessions = (
+            await db.execute(
+                select(WhatsAppSession).where(WhatsAppSession.user_id == user.id).order_by(WhatsAppSession.created_at.desc())
+            )
+        ).scalars().all()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+    return UserOverviewResponse(
+        email=user.email,
+        total_sessions=total_sessions,
+        connected_sessions=connected_sessions,
+        total_messages=total_messages,
+        databases=[
+            DatabaseProfileResponse(
+                provider=row.provider,
+                masked_database_url=row.masked_database_url,
+                verified=row.verified,
+            )
+            for row in db_profiles
+        ],
+        sessions=[
+            SessionRecord(phone_number=row.phone_number, session_id=row.session_id, status=row.status) for row in sessions
+        ],
+    )
+
+
+@app.post("/me/database/connect", response_model=DatabaseProfileResponse)
+async def connect_database(
+    payload: DatabaseConnectRequest,
+    user: UserAccount = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> DatabaseProfileResponse:
+    provider = payload.provider.strip().lower()
+    if provider not in {"neon", "supabase"}:
+        raise HTTPException(status_code=400, detail="provider must be neon or supabase")
+    await _validate_external_database(payload.database_url)
+    masked = _mask_database_url(payload.database_url)
+    try:
+        existing = (
+            await db.execute(
+                select(UserDatabaseProfile).where(
+                    UserDatabaseProfile.user_id == user.id, UserDatabaseProfile.provider == provider
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            existing.masked_database_url = masked
+            existing.verified = "yes"
+            await db.commit()
+            return DatabaseProfileResponse(
+                provider=existing.provider, masked_database_url=existing.masked_database_url, verified=existing.verified
+            )
+
+        row = UserDatabaseProfile(user_id=user.id, provider=provider, masked_database_url=masked, verified="yes")
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+    return DatabaseProfileResponse(provider=row.provider, masked_database_url=row.masked_database_url, verified=row.verified)
 
 
 @app.get("/setup/env-vars")
@@ -239,10 +555,12 @@ async def setup_env_vars() -> dict[str, list[dict[str, str]]]:
 
 @app.post("/whatsapp/connect", response_model=WhatsAppConnectResponse)
 async def whatsapp_connect(
-    payload: WhatsAppConnectRequest, db: AsyncSession = Depends(get_db_session)
+    payload: WhatsAppConnectRequest,
+    user: UserAccount = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> WhatsAppConnectResponse:
     phone_number = _normalize_phone_number(payload.phone_number)
-    stmt = select(WhatsAppSession).where(WhatsAppSession.phone_number == phone_number)
+    stmt = select(WhatsAppSession).where(WhatsAppSession.phone_number == phone_number, WhatsAppSession.user_id == user.id)
 
     try:
         existing = (await db.execute(stmt)).scalar_one_or_none()
@@ -254,7 +572,12 @@ async def whatsapp_connect(
             )
 
         session_id = _generate_session_id()
-        session = WhatsAppSession(phone_number=phone_number, session_id=session_id, status="connected")
+        session = WhatsAppSession(
+            user_id=user.id,
+            phone_number=phone_number,
+            session_id=session_id,
+            status="connected",
+        )
         db.add(session)
         await db.commit()
         await db.refresh(session)
@@ -273,6 +596,7 @@ async def whatsapp_connect(
 @app.post("/webhook", response_model=BotResponse)
 async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(get_db_session)) -> BotResponse:
     sender_phone: str | None = None
+    owner_user_id: int | None = None
     if settings.whatsapp_only:
         try:
             sender_phone = _sender_to_phone(incoming_message.sender)
@@ -296,6 +620,7 @@ async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(
 
         if not session:
             raise HTTPException(status_code=401, detail="Invalid session_id")
+        owner_user_id = session.user_id
         if sender_phone:
             session_phone = _normalize_phone_for_compare(session.phone_number)
             sender_phone_normalized = _normalize_phone_for_compare(sender_phone)
@@ -311,7 +636,14 @@ async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(
     )
 
     try:
-        db.add(MessageLog(sender=incoming_message.sender, text=incoming_message.message, reply=reply))
+        db.add(
+            MessageLog(
+                user_id=owner_user_id,
+                sender=incoming_message.sender,
+                text=incoming_message.message,
+                reply=reply,
+            )
+        )
         await db.commit()
     except SQLAlchemyError as exc:
         await db.rollback()

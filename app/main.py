@@ -62,10 +62,11 @@ def _normalize_phone_number(phone_number: str) -> str:
 
 
 def _generate_session_id() -> str:
-    while True:
+    for _ in range(5):
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
         if len(token) <= MAX_SESSION_ID_LENGTH:
             return token
+    raise RuntimeError("Failed to generate a valid session token length")
 
 
 @app.get("/health")

@@ -5,20 +5,33 @@ Deployable FastAPI backend for **A-bot** with WhatsApp-only access, session onbo
 ## What this supports
 - Cloud deployment with environment variables (no hardcoded secrets)
 - Free Postgres providers (Neon/Supabase)
-- Session ID generation when a WhatsApp phone number is connected
-- Web interface at `GET /` for live status + session generation
+- User login/register and personal workspace management
+- Session ID generation when each user connects a WhatsApp phone number
+- Web interface at `GET /` for login, runtime view, database profile setup, and session generation
 - Bot webhook with command handling and message logging
 - Prefix-based WhatsApp commands (default prefix `.`)
 - Optional Docker usage (for users who still want containers)
 
 ## API
 - `GET /health` → health check
-- `GET /` → A-bot control interface (status + session ID generator)
+- `GET /` → A-bot control interface (register/login + workspace manager)
 - `GET /setup/env-vars` → required/optional env vars for self-deploy
-- `POST /whatsapp/connect` → connect phone number and generate/reuse `session_id`
+- `POST /auth/register` → create user and return access token
+- `POST /auth/login` → login and return access token
+- `GET /me/overview` → authenticated workspace stats/sessions/database profile
+- `POST /me/database/connect` → verify and save Neon/Supabase DB profile (masked URL)
+- `POST /whatsapp/connect` → authenticated connect phone number and generate/reuse `session_id`
 - `POST /webhook` → WhatsApp-only message webhook (`sender` must be phone/JID and `session_id` is required by default)
 
-### Connect phone and get session
+### Register/login response
+```json
+{
+  "token": "<bearer_token>",
+  "email": "user@example.com"
+}
+```
+
+### Connect phone and get session (authenticated)
 Request:
 ```json
 {
@@ -56,7 +69,9 @@ Use configured prefix (default `.`), for example:
 - `.echo hello`
 
 ## Normal WhatsApp usage
-- Open `GET /` and generate/reuse a session ID with your phone number.
+- Open `GET /` and create account/login.
+- Connect your free DB profile (Neon/Supabase) in the dashboard.
+- Generate/reuse a session ID with your WhatsApp phone number.
 - Connect your WhatsApp bridge/client and forward incoming messages to `POST /webhook`.
 - If you use **Baileys**, keep it as the WhatsApp transport layer and post received messages to this API.
 
@@ -82,7 +97,7 @@ Common optional:
 ## Self-deploy (FastAPI cloud/ASGI platforms)
 1. Fork/push this repository.
 2. Create a free Postgres database on Neon or Supabase.
-3. Add env vars in your deployment platform.
+3. Set that database URL as `DATABASE_URL` in your FastAPI cloud deployment.
 4. Deploy with startup command:
    ```bash
    uvicorn app.main:app --host 0.0.0.0 --port 8000

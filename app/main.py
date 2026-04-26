@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot import generate_reply
 from app.config import settings
 from app.db import MessageLog, get_db_session, init_db
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -44,6 +47,7 @@ async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(
         await db.commit()
     except SQLAlchemyError as exc:
         await db.rollback()
+        logger.exception("Failed to commit webhook message to database")
         raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
 
     return BotResponse(sender=incoming_message.sender, reply=reply)

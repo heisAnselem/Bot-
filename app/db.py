@@ -17,7 +17,7 @@ def _normalize_database_url(database_url: str) -> str:
 
 
 engine = create_async_engine(_normalize_database_url(settings.database_url))
-SessionLocal = async_sessionmaker(bind=engine, autoflush=False, class_=AsyncSession, expire_on_commit=False)
+SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):

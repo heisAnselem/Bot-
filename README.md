@@ -40,7 +40,7 @@ Use a free Postgres provider like:
 Set:
 - `DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require`
 
-## Deploy on FastAPI Cloud
+## Deploy on FastAPI Cloud (or any ASGI cloud)
 1. Push this repository to GitHub.
 2. Create your database on Neon/Supabase and copy the connection URL.
 3. Create a FastAPI Cloud project from this repo.

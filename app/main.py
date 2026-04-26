@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,7 +9,14 @@ from app.bot import generate_reply
 from app.config import settings
 from app.db import MessageLog, get_db_session, init_db
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await init_db()
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 
 class IncomingMessage(BaseModel):
@@ -17,11 +27,6 @@ class IncomingMessage(BaseModel):
 class BotResponse(BaseModel):
     sender: str
     reply: str
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    await init_db()
 
 
 @app.get("/health")

@@ -76,7 +76,10 @@ async def setup_env_vars() -> dict[str, list[dict[str, str]]]:
         "optional": [
             {"name": "ENVIRONMENT", "description": "Environment name, e.g. production."},
             {"name": "BOT_NAME", "description": "Custom bot display name."},
-            {"name": "REQUIRE_SESSION_ID", "description": "Set true to require valid session IDs for webhook calls."},
+            {
+                "name": "REQUIRE_SESSION_ID",
+                "description": "Set to true to require valid session IDs for webhook calls.",
+            },
             {"name": "DEFAULT_SESSION_ID", "description": "Fallback session ID if you pre-generate one."},
             {"name": "ADMIN_PHONE_NUMBER", "description": "Owner/admin phone number for operational alerts."},
             {"name": "WHATSAPP_API_URL", "description": "WhatsApp API endpoint if integrating external provider."},

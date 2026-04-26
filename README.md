@@ -27,7 +27,7 @@ Response:
 ```json
 {
   "phone_number": "+2348012345678",
-  "session_id": "wa_<generated_id>",
+  "session_id": "<generated_secure_token>",
   "status": "connected"
 }
 ```
@@ -38,7 +38,7 @@ Request:
 {
   "sender": "user-123",
   "message": "help",
-  "session_id": "wa_<generated_id>"
+  "session_id": "<generated_secure_token>"
 }
 ```
 

@@ -1,17 +1,19 @@
-# Bot- (Levanter-style FastAPI bot)
+# Bot- (A-bot WhatsApp backend)
 
-Deployable FastAPI bot backend with self-serve environment setup, Postgres storage, and WhatsApp-only session onboarding.
+Deployable FastAPI backend for **A-bot** with WhatsApp-only access, session onboarding, and a built-in web control interface.
 
 ## What this supports
 - Cloud deployment with environment variables (no hardcoded secrets)
 - Free Postgres providers (Neon/Supabase)
 - Session ID generation when a WhatsApp phone number is connected
+- Web interface at `GET /` for live status + session generation
 - Bot webhook with command handling and message logging
 - Prefix-based WhatsApp commands (default prefix `.`)
 - Optional Docker usage (for users who still want containers)
 
 ## API
 - `GET /health` → health check
+- `GET /` → A-bot control interface (status + session ID generator)
 - `GET /setup/env-vars` → required/optional env vars for self-deploy
 - `POST /whatsapp/connect` → connect phone number and generate/reuse `session_id`
 - `POST /webhook` → WhatsApp-only message webhook (`sender` must be phone/JID and `session_id` is required by default)
@@ -52,6 +54,11 @@ Use configured prefix (default `.`), for example:
 - `.owner`
 - `.runtime`
 - `.echo hello`
+
+## Normal WhatsApp usage
+- Open `GET /` and generate/reuse a session ID with your phone number.
+- Connect your WhatsApp bridge/client and forward incoming messages to `POST /webhook`.
+- If you use **Baileys**, keep it as the WhatsApp transport layer and post received messages to this API.
 
 ## Environment variables
 Required:

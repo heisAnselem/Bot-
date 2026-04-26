@@ -1,13 +1,15 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import html
 import logging
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.bot import generate_reply
 from app.config import settings
@@ -83,6 +85,129 @@ def _generate_session_id() -> str:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.environment}
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(db: AsyncSession = Depends(get_db_session)) -> HTMLResponse:
+    db_status = "online"
+    total_sessions = 0
+    connected_sessions = 0
+    total_messages = 0
+    latest_phone = "none"
+    latest_session_id = "none"
+
+    try:
+        total_sessions = int((await db.execute(select(func.count(WhatsAppSession.id)))).scalar_one() or 0)
+        connected_sessions = int(
+            (
+                await db.execute(
+                    select(func.count(WhatsAppSession.id)).where(WhatsAppSession.status == "connected")
+                )
+            ).scalar_one()
+            or 0
+        )
+        total_messages = int((await db.execute(select(func.count(MessageLog.id)))).scalar_one() or 0)
+        latest = (
+            await db.execute(select(WhatsAppSession).order_by(WhatsAppSession.created_at.desc()).limit(1))
+        ).scalar_one_or_none()
+        if latest:
+            latest_phone = latest.phone_number
+            latest_session_id = latest.session_id
+    except SQLAlchemyError:
+        db_status = "offline"
+
+    escaped_prefix = html.escape(settings.command_prefix)
+    escaped_bot_name = html.escape(settings.bot_name)
+    escaped_latest_phone = html.escape(latest_phone)
+    escaped_latest_session = html.escape(latest_session_id)
+    whatsapp_mode = "enabled" if settings.whatsapp_only else "disabled"
+    require_session = "enabled" if settings.require_session_id else "disabled"
+    bridge_hint = "configured" if settings.whatsapp_api_url else "not configured"
+
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{escaped_bot_name} Control Panel</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: Inter, system-ui, Arial, sans-serif; }}
+    body {{ margin: 0; background: #0d1117; color: #e6edf3; }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; padding: 24px; }}
+    h1 {{ margin-top: 0; }}
+    .grid {{ display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }}
+    .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 16px; }}
+    .cards {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+    .label {{ color: #8b949e; font-size: 12px; text-transform: uppercase; }}
+    .value {{ font-size: 20px; font-weight: 600; margin-top: 6px; }}
+    .line {{ margin: 6px 0; color: #c9d1d9; word-break: break-all; }}
+    input, button {{ width: 100%; border-radius: 10px; border: 1px solid #30363d; padding: 12px; background: #0d1117; color: #e6edf3; }}
+    button {{ cursor: pointer; background: #238636; border-color: #2ea043; font-weight: 600; }}
+    button:hover {{ background: #2ea043; }}
+    .out {{ margin-top: 12px; background: #0d1117; border: 1px dashed #30363d; border-radius: 10px; padding: 12px; min-height: 44px; }}
+    @media (max-width: 900px) {{ .grid {{ grid-template-columns: 1fr; }} .cards {{ grid-template-columns: 1fr; }} }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>{escaped_bot_name} Interface</h1>
+    <p>WhatsApp-only mode for normal WhatsApp users. Use this page to monitor runtime state and generate session IDs.</p>
+    <div class="cards">
+      <div class="card"><div class="label">Database</div><div class="value">{db_status}</div></div>
+      <div class="card"><div class="label">WhatsApp sessions</div><div class="value">{total_sessions}</div></div>
+      <div class="card"><div class="label">Connected sessions</div><div class="value">{connected_sessions}</div></div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <h3>System status</h3>
+        <div class="line"><b>Bot Name:</b> {escaped_bot_name}</div>
+        <div class="line"><b>Prefix:</b> {escaped_prefix}</div>
+        <div class="line"><b>WhatsApp only:</b> {whatsapp_mode}</div>
+        <div class="line"><b>Session required:</b> {require_session}</div>
+        <div class="line"><b>Total logged messages:</b> {total_messages}</div>
+        <div class="line"><b>Latest connected phone:</b> {escaped_latest_phone}</div>
+        <div class="line"><b>Latest session id:</b> {escaped_latest_session}</div>
+        <div class="line"><b>Bridge status:</b> {bridge_hint}</div>
+      </div>
+      <div class="card">
+        <h3>Generate session ID</h3>
+        <form id="connect-form">
+          <input id="phone_number" name="phone_number" placeholder="+2348012345678" required />
+          <div style="height: 10px;"></div>
+          <button type="submit">Connect WhatsApp</button>
+        </form>
+        <div class="out" id="output">Waiting for input…</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById('connect-form');
+    const out = document.getElementById('output');
+    form.addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const phone_number = document.getElementById('phone_number').value.trim();
+      out.textContent = 'Generating session…';
+      try {{
+        const res = await fetch('/whatsapp/connect', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ phone_number }})
+        }});
+        const data = await res.json();
+        if (!res.ok) {{
+          out.textContent = data.detail || 'Failed to connect phone number.';
+          return;
+        }}
+        out.textContent = `Phone: ${'{'}data.phone_number{'}'}\\nSession ID: ${'{'}data.session_id{'}'}\\nStatus: ${'{'}data.status{'}'}`;
+      }} catch (err) {{
+        out.textContent = 'Network error while connecting phone number.';
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+
+    return HTMLResponse(content=page)
 
 
 @app.get("/setup/env-vars")

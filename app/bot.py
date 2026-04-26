@@ -200,7 +200,7 @@ def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
     user = _display_user(sender)
     ram = _ram_usage()
     return (
-        "╭═══ LEVANTER ═══⊷\n"
+        "╭═══ A-BOT ═══⊷\n"
         "┃❃╭──────────────\n"
         f"┃❃│ Prefix : {prefix}\n"
         f"┃❃│ User : {user}\n"
@@ -269,7 +269,7 @@ def generate_reply(message: str, sender: str, prefix: str, version: str, plugins
     if normalized in {"menu", "help", "commands"}:
         return _full_menu(prefix=prefix, sender=sender, version=version, plugins=plugins)
     if normalized in {"hi", "hello", "hey"}:
-        return "Hello 👋 I am your Levanter-style WhatsApp bot."
+        return "Hello 👋 I am your A-bot WhatsApp bot."
     if normalized == "ping":
         return "pong"
     if normalized in {"alive", "status"}:
@@ -279,7 +279,7 @@ def generate_reply(message: str, sender: str, prefix: str, version: str, plugins
     if normalized == "runtime":
         return "Runtime: FastAPI + Postgres + WhatsApp session storage"
     if normalized == "about":
-        return "I’m a Levanter-style WhatsApp-only bot backend running on FastAPI."
+        return "I’m A-bot, a WhatsApp-only bot backend running on FastAPI."
     if normalized == "echo":
         return args.strip() or "Nothing to echo."
     if normalized in SUPPORTED_COMMANDS:

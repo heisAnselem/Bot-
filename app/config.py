@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "Levanter FastAPI Bot"
-    bot_name: str = "Levanter FastAPI Bot"
+    app_name: str = "A-bot"
+    bot_name: str = "A-bot"
     environment: str = "development"
     session_token_bytes: int = 32
     max_session_id_length: int = 128

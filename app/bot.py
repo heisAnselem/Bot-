@@ -1,4 +1,14 @@
-HELP_TEXT = "Commands: hi/hello/hey, ping, about, help, alive (or status), owner, runtime, echo <text>"
+SUPPORTED_COMMANDS = [
+    "hi/hello/hey",
+    "ping",
+    "about",
+    "help",
+    "alive/status",
+    "owner",
+    "runtime",
+    "echo <text>",
+]
+HELP_TEXT = f"Commands: {', '.join(SUPPORTED_COMMANDS)}"
 
 
 def generate_reply(message: str) -> str:

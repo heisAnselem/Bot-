@@ -14,6 +14,8 @@ from app.config import settings
 from app.db import MessageLog, WhatsAppSession, get_db_session, init_db
 
 logger = logging.getLogger(__name__)
+SESSION_TOKEN_BYTES = 32
+MAX_SESSION_ID_LENGTH = 128
 
 
 @asynccontextmanager
@@ -57,6 +59,13 @@ def _normalize_phone_number(phone_number: str) -> str:
     if not value.isdigit():
         raise HTTPException(status_code=400, detail="Phone number must contain only digits and optional leading +")
     return value
+
+
+def _generate_session_id() -> str:
+    while True:
+        token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
+        if len(token) <= MAX_SESSION_ID_LENGTH:
+            return token
 
 
 @app.get("/health")
@@ -105,7 +114,7 @@ async def whatsapp_connect(
                 status=existing.status,
             )
 
-        session_id = secrets.token_urlsafe(32)
+        session_id = _generate_session_id()
         session = WhatsAppSession(phone_number=phone_number, session_id=session_id, status="connected")
         db.add(session)
         await db.commit()

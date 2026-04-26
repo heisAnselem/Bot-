@@ -63,6 +63,7 @@ Common optional:
 - `COMMAND_PREFIX` (default `.`)
 - `WHATSAPP_ONLY` (`true`/`false`, default `true`)
 - `REQUIRE_SESSION_ID` (`true`/`false`)
+- `MAX_SESSION_ID_GENERATION_ATTEMPTS` (default `5`)
 - `DEFAULT_SESSION_ID`
 - `ADMIN_PHONE_NUMBER`
 - `LEVANTER_VERSION` (display-only text in menu header)

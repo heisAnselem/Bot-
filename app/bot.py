@@ -206,7 +206,7 @@ def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
         f"┃❃│ User : {user}\n"
         f"┃❃│ Time : {now.strftime('%I:%M %p')}\n"
         f"┃❃│ Day : {now.strftime('%A')}\n"
-        f"┃❃│ Date : {now.month}/{now.day}/{now.year}\n"
+        f"┃❃│ Date : {now.strftime('%m/%d/%Y')}\n"
         f"┃❃│ Version : {version}\n"
         f"┃❃│ Plugins : {plugins}\n"
         f"┃❃│ Ram : {ram}\n"
@@ -218,7 +218,7 @@ def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
 
 
 def _ram_usage() -> str:
-    """Return used/total RAM from /proc/meminfo on Linux, otherwise 'unknown'."""
+    """Return used/total RAM from Linux /proc/meminfo; returns 'unknown' on non-Linux systems."""
     try:
         mem_total_kb = 0
         mem_available_kb = 0

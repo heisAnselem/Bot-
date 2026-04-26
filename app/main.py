@@ -71,11 +71,13 @@ def _normalize_phone_for_compare(phone_number: str) -> str:
 
 
 def _generate_session_id() -> str:
-    for _ in range(5):
+    for _ in range(settings.max_session_id_generation_attempts):
         token = secrets.token_urlsafe(settings.session_token_bytes)
         if len(token) <= settings.max_session_id_length:
             return token
-    raise RuntimeError("Failed to generate session token within size limit after 5 attempts")
+    raise RuntimeError(
+        f"Failed to generate session token within size limit after {settings.max_session_id_generation_attempts} attempts"
+    )
 
 
 @app.get("/health")
@@ -169,8 +171,11 @@ async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(
 
         if not session:
             raise HTTPException(status_code=401, detail="Invalid session_id")
-        if sender_phone and _normalize_phone_for_compare(session.phone_number) != _normalize_phone_for_compare(sender_phone):
-            raise HTTPException(status_code=401, detail="session_id does not match sender phone")
+        if sender_phone:
+            session_phone = _normalize_phone_for_compare(session.phone_number)
+            sender_phone_normalized = _normalize_phone_for_compare(sender_phone)
+            if session_phone != sender_phone_normalized:
+                raise HTTPException(status_code=401, detail="session_id does not match sender phone")
 
     reply = generate_reply(
         incoming_message.message,

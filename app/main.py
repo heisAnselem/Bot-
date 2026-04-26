@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import logging
-from uuid import uuid4
+import secrets
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -102,7 +102,7 @@ async def whatsapp_connect(
                 status=existing.status,
             )
 
-        session_id = f"wa_{uuid4().hex}"
+        session_id = f"wa_{secrets.token_urlsafe(24)}"
         session = WhatsAppSession(phone_number=phone_number, session_id=session_id, status="connected")
         db.add(session)
         await db.commit()
@@ -122,7 +122,7 @@ async def whatsapp_connect(
 @app.post("/webhook", response_model=BotResponse)
 async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(get_db_session)) -> BotResponse:
     if settings.require_session_id:
-        provided = incoming_message.session_id or settings.default_session_id
+        provided = incoming_message.session_id
         if not provided:
             raise HTTPException(status_code=401, detail="session_id is required")
 

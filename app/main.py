@@ -61,6 +61,13 @@ def _normalize_phone_number(phone_number: str) -> str:
     return value
 
 
+def _sender_to_phone(sender: str) -> str:
+    value = sender.strip()
+    if value.endswith("@s.whatsapp.net"):
+        return _normalize_phone_number(value.split("@", 1)[0])
+    return _normalize_phone_number(value)
+
+
 def _generate_session_id() -> str:
     for _ in range(5):
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
@@ -86,6 +93,8 @@ async def setup_env_vars() -> dict[str, list[dict[str, str]]]:
         "optional": [
             {"name": "ENVIRONMENT", "description": "Environment name, e.g. production."},
             {"name": "BOT_NAME", "description": "Custom bot display name."},
+            {"name": "COMMAND_PREFIX", "description": "WhatsApp command prefix, e.g. ."},
+            {"name": "WHATSAPP_ONLY", "description": "Set to true to accept WhatsApp-style requests only."},
             {
                 "name": "REQUIRE_SESSION_ID",
                 "description": "Set to true to require valid session IDs for webhook calls.",
@@ -134,7 +143,15 @@ async def whatsapp_connect(
 
 @app.post("/webhook", response_model=BotResponse)
 async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(get_db_session)) -> BotResponse:
-    if settings.require_session_id:
+    sender_phone: str | None = None
+    if settings.whatsapp_only:
+        try:
+            sender_phone = _sender_to_phone(incoming_message.sender)
+        except HTTPException as exc:
+            raise HTTPException(status_code=400, detail="sender must be a WhatsApp phone number or JID") from exc
+
+    enforce_session = settings.whatsapp_only or settings.require_session_id
+    if enforce_session:
         provided = incoming_message.session_id
         if not provided:
             raise HTTPException(status_code=401, detail="session_id is required")
@@ -150,8 +167,16 @@ async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(
 
         if not session:
             raise HTTPException(status_code=401, detail="Invalid session_id")
+        if sender_phone and session.phone_number.lstrip("+") != sender_phone.lstrip("+"):
+            raise HTTPException(status_code=401, detail="session_id does not match sender phone")
 
-    reply = generate_reply(incoming_message.message)
+    reply = generate_reply(
+        incoming_message.message,
+        sender=incoming_message.sender,
+        prefix=settings.command_prefix,
+        version=settings.levanter_version,
+        plugins=settings.levanter_plugins,
+    )
 
     try:
         db.add(MessageLog(sender=incoming_message.sender, text=incoming_message.message, reply=reply))

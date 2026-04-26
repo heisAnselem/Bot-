@@ -1,19 +1,20 @@
 # Bot- (Levanter-style FastAPI bot)
 
-Deployable FastAPI bot backend with self-serve environment setup, Postgres storage, and WhatsApp-style session onboarding.
+Deployable FastAPI bot backend with self-serve environment setup, Postgres storage, and WhatsApp-only session onboarding.
 
 ## What this supports
 - Cloud deployment with environment variables (no hardcoded secrets)
 - Free Postgres providers (Neon/Supabase)
 - Session ID generation when a WhatsApp phone number is connected
 - Bot webhook with command handling and message logging
+- Prefix-based WhatsApp commands (default prefix `.`)
 - Optional Docker usage (for users who still want containers)
 
 ## API
 - `GET /health` → health check
 - `GET /setup/env-vars` → required/optional env vars for self-deploy
 - `POST /whatsapp/connect` → connect phone number and generate/reuse `session_id`
-- `POST /webhook` → send incoming messages (supports optional `session_id`)
+- `POST /webhook` → WhatsApp-only message webhook (`sender` must be phone/JID and `session_id` is required by default)
 
 ### Connect phone and get session
 Request:
@@ -32,18 +33,25 @@ Response:
 }
 ```
 
-### Send message
+### Send WhatsApp message
 Request:
 ```json
 {
-  "sender": "user-123",
-  "message": "help",
+  "sender": "2348012345678@s.whatsapp.net",
+  "message": ".menu",
   "session_id": "<generated_secure_token>"
 }
 ```
 
 ## Supported built-in commands
-`hello`, `ping`, `about`, `help`, `alive`, `owner`, `runtime`, `echo <text>`
+Use configured prefix (default `.`), for example:
+- `.menu` (full Levanter-style menu layout)
+- `.ping`
+- `.alive`
+- `.about`
+- `.owner`
+- `.runtime`
+- `.echo hello`
 
 ## Environment variables
 Required:
@@ -52,9 +60,13 @@ Required:
 Common optional:
 - `ENVIRONMENT`
 - `BOT_NAME`
+- `COMMAND_PREFIX` (default `.`)
+- `WHATSAPP_ONLY` (`true`/`false`, default `true`)
 - `REQUIRE_SESSION_ID` (`true`/`false`)
 - `DEFAULT_SESSION_ID`
 - `ADMIN_PHONE_NUMBER`
+- `LEVANTER_VERSION`
+- `LEVANTER_PLUGINS`
 - `WHATSAPP_API_URL`
 - `WHATSAPP_ACCESS_TOKEN`
 - `WHATSAPP_PHONE_NUMBER_ID`

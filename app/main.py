@@ -66,6 +66,10 @@ def _sender_to_phone(sender: str) -> str:
     return _normalize_phone_number(value)
 
 
+def _normalize_phone_for_compare(phone_number: str) -> str:
+    return phone_number.lstrip("+")
+
+
 def _generate_session_id() -> str:
     for _ in range(5):
         token = secrets.token_urlsafe(settings.session_token_bytes)
@@ -165,7 +169,7 @@ async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(
 
         if not session:
             raise HTTPException(status_code=401, detail="Invalid session_id")
-        if sender_phone and session.phone_number.lstrip("+") != sender_phone.lstrip("+"):
+        if sender_phone and _normalize_phone_for_compare(session.phone_number) != _normalize_phone_for_compare(sender_phone):
             raise HTTPException(status_code=401, detail="session_id does not match sender phone")
 
     reply = generate_reply(

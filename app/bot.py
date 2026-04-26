@@ -218,6 +218,7 @@ def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
 
 
 def _ram_usage() -> str:
+    """Return used/total RAM from /proc/meminfo on Linux, otherwise 'unknown'."""
     try:
         mem_total_kb = 0
         mem_available_kb = 0
@@ -258,7 +259,7 @@ def generate_reply(message: str, sender: str, prefix: str, version: str, plugins
     if not text.startswith(prefix):
         return f"WhatsApp command mode is enabled. Use {prefix}menu."
 
-    command_line = text[len(prefix) :].strip()
+    command_line = text.removeprefix(prefix).strip()
     if not command_line:
         return f"Use {prefix}menu to open commands."
 

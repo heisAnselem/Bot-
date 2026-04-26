@@ -1,3 +1,6 @@
+HELP_TEXT = "Commands: hi/hello/hey, ping, about, help, alive (or status), owner, runtime, echo <text>"
+
+
 def generate_reply(message: str) -> str:
     text = (message or "").strip()
     normalized = text.lower()
@@ -7,7 +10,7 @@ def generate_reply(message: str) -> str:
     if normalized in {"hi", "hello", "hey"}:
         return "Hello 👋 I am your Levanter-style FastAPI bot."
     if normalized in {"help", "menu", "commands"}:
-        return "Commands: hi/hello/hey, ping, about, help, alive (or status), owner, runtime, echo <text>"
+        return HELP_TEXT
     if normalized == "ping":
         return "pong"
     if normalized in {"alive", "status"}:

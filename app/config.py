@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     app_name: str = "Levanter FastAPI Bot"
     bot_name: str = "Levanter FastAPI Bot"
     environment: str = "development"
+    session_token_bytes: int = 32
+    max_session_id_length: int = 128
     database_url: str = Field(
         description="Postgres connection string, e.g. postgresql://USER:PASSWORD@HOST/DB?sslmode=require"
     )

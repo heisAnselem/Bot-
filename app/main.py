@@ -14,8 +14,6 @@ from app.config import settings
 from app.db import MessageLog, WhatsAppSession, get_db_session, init_db
 
 logger = logging.getLogger(__name__)
-SESSION_TOKEN_BYTES = 32
-MAX_SESSION_ID_LENGTH = 128
 
 
 @asynccontextmanager
@@ -70,10 +68,10 @@ def _sender_to_phone(sender: str) -> str:
 
 def _generate_session_id() -> str:
     for _ in range(5):
-        token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
-        if len(token) <= MAX_SESSION_ID_LENGTH:
+        token = secrets.token_urlsafe(settings.session_token_bytes)
+        if len(token) <= settings.max_session_id_length:
             return token
-    raise RuntimeError("Failed to generate a valid session token length")
+    raise RuntimeError("Failed to generate session token within size limit after 5 attempts")
 
 
 @app.get("/health")
@@ -91,7 +89,7 @@ async def setup_env_vars() -> dict[str, list[dict[str, str]]]:
             },
         ],
         "optional": [
-            {"name": "ENVIRONMENT", "description": "Environment name, e.g. production."},
+            {"name": "ENVIRONMENT", "description": "Environment name, e.g., production."},
             {"name": "BOT_NAME", "description": "Custom bot display name."},
             {"name": "COMMAND_PREFIX", "description": "WhatsApp command prefix, e.g. ."},
             {"name": "WHATSAPP_ONLY", "description": "Set to true to accept WhatsApp-style requests only."},

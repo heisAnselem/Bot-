@@ -198,6 +198,7 @@ def _format_uptime() -> str:
 def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
     now = datetime.now()
     user = _display_user(sender)
+    ram = _ram_usage()
     return (
         "╭═══ LEVANTER ═══⊷\n"
         "┃❃╭──────────────\n"
@@ -208,12 +209,33 @@ def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
         f"┃❃│ Date : {now.month}/{now.day}/{now.year}\n"
         f"┃❃│ Version : {version}\n"
         f"┃❃│ Plugins : {plugins}\n"
-        "┃❃│ Ram : live runtime value\n"
+        f"┃❃│ Ram : {ram}\n"
         f"┃❃│ Uptime : {_format_uptime()}\n"
         f"┃❃│ Platform : {platform.system()} {platform.machine()}\n"
         "┃❃╰───────────────\n"
         "╰═════════════════⊷"
     )
+
+
+def _ram_usage() -> str:
+    try:
+        mem_total_kb = 0
+        mem_available_kb = 0
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    mem_total_kb = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    mem_available_kb = int(line.split()[1])
+                if mem_total_kb and mem_available_kb:
+                    break
+
+        if not mem_total_kb:
+            return "unknown"
+        used_kb = max(mem_total_kb - mem_available_kb, 0)
+        return f"{used_kb // 1024}/{mem_total_kb // 1024}MB"
+    except OSError:
+        return "unknown"
 
 
 def _menu_sections() -> str:

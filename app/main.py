@@ -102,7 +102,7 @@ async def whatsapp_connect(
                 status=existing.status,
             )
 
-        session_id = f"wa_{secrets.token_urlsafe(24)}"
+        session_id = secrets.token_urlsafe(32)
         session = WhatsAppSession(phone_number=phone_number, session_id=session_id, status="connected")
         db.add(session)
         await db.commit()

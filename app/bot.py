@@ -205,7 +205,7 @@ def _menu_header(prefix: str, sender: str, version: str, plugins: int) -> str:
         f"┃❃│ User : {user}\n"
         f"┃❃│ Time : {now.strftime('%I:%M %p')}\n"
         f"┃❃│ Day : {now.strftime('%A')}\n"
-        f"┃❃│ Date : {now.strftime('%-m/%-d/%Y')}\n"
+        f"┃❃│ Date : {now.month}/{now.day}/{now.year}\n"
         f"┃❃│ Version : {version}\n"
         f"┃❃│ Plugins : {plugins}\n"
         "┃❃│ Ram : live runtime value\n"

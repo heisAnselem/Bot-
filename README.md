@@ -65,8 +65,8 @@ Common optional:
 - `REQUIRE_SESSION_ID` (`true`/`false`)
 - `DEFAULT_SESSION_ID`
 - `ADMIN_PHONE_NUMBER`
-- `LEVANTER_VERSION`
-- `LEVANTER_PLUGINS`
+- `LEVANTER_VERSION` (display-only text in menu header)
+- `LEVANTER_PLUGINS` (display-only text in menu header)
 - `WHATSAPP_API_URL`
 - `WHATSAPP_ACCESS_TOKEN`
 - `WHATSAPP_PHONE_NUMBER_ID`

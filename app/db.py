@@ -34,6 +34,19 @@ class MessageLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class WhatsAppSession(Base):
+    __tablename__ = "whatsapp_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    phone_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    session_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="connected")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

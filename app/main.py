@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import hashlib
 import html
 import logging
@@ -27,6 +28,8 @@ from app.db import (
 )
 
 logger = logging.getLogger(__name__)
+TOKEN_TTL_DAYS = 30
+PASSWORD_HASH_ITERATIONS = 600_000
 
 
 @asynccontextmanager
@@ -143,7 +146,7 @@ def _generate_session_id() -> str:
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
     active_salt = salt or secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), active_salt, 200_000)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), active_salt, PASSWORD_HASH_ITERATIONS)
     return f"{active_salt.hex()}:{digest.hex()}"
 
 
@@ -202,9 +205,14 @@ async def get_current_user(
 ) -> UserAccount:
     token = _extract_bearer_token(authorization)
     try:
+        await db.execute(delete(UserToken).where(UserToken.expires_at < datetime.now(timezone.utc)))
         token_row = (await db.execute(select(UserToken).where(UserToken.token == token))).scalar_one_or_none()
         if not token_row:
             raise HTTPException(status_code=401, detail="Invalid token")
+        if token_row.expires_at <= datetime.now(timezone.utc):
+            await db.execute(delete(UserToken).where(UserToken.id == token_row.id))
+            await db.commit()
+            raise HTTPException(status_code=401, detail="Token expired")
         user = (await db.execute(select(UserAccount).where(UserAccount.id == token_row.user_id))).scalar_one_or_none()
     except SQLAlchemyError as exc:
         await db.rollback()
@@ -404,7 +412,13 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_s
         db.add(user)
         await db.flush()
         token = secrets.token_urlsafe(32)
-        db.add(UserToken(user_id=user.id, token=token))
+        db.add(
+            UserToken(
+                user_id=user.id,
+                token=token,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=TOKEN_TTL_DAYS),
+            )
+        )
         await db.commit()
     except SQLAlchemyError as exc:
         await db.rollback()
@@ -420,9 +434,15 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db_session
         user = (await db.execute(select(UserAccount).where(UserAccount.email == email))).scalar_one_or_none()
         if not user or not _verify_password(payload.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        await db.execute(delete(UserToken).where(UserToken.user_id == user.id))
+        await db.execute(delete(UserToken).where(UserToken.expires_at < datetime.now(timezone.utc)))
         token = secrets.token_urlsafe(32)
-        db.add(UserToken(user_id=user.id, token=token))
+        db.add(
+            UserToken(
+                user_id=user.id,
+                token=token,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=TOKEN_TTL_DAYS),
+            )
+        )
         await db.commit()
     except SQLAlchemyError as exc:
         await db.rollback()

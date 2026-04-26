@@ -38,6 +38,7 @@ class UserToken(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
     token: Mapped[str] = mapped_column(String(256), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -66,10 +67,11 @@ class MessageLog(Base):
 
 class WhatsAppSession(Base):
     __tablename__ = "whatsapp_sessions"
+    __table_args__ = (UniqueConstraint("user_id", "phone_number", name="uq_user_phone_session"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
-    phone_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    phone_number: Mapped[str] = mapped_column(String(32), index=True)
     session_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="connected")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

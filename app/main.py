@@ -35,10 +35,10 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/webhook", response_model=BotResponse)
-async def webhook(payload: IncomingMessage, db: AsyncSession = Depends(get_db_session)) -> BotResponse:
-    reply = generate_reply(payload.message)
+async def webhook(incoming_message: IncomingMessage, db: AsyncSession = Depends(get_db_session)) -> BotResponse:
+    reply = generate_reply(incoming_message.message)
 
-    db.add(MessageLog(sender=payload.sender, text=payload.message, reply=reply))
+    db.add(MessageLog(sender=incoming_message.sender, text=incoming_message.message, reply=reply))
     await db.commit()
 
-    return BotResponse(sender=payload.sender, reply=reply)
+    return BotResponse(sender=incoming_message.sender, reply=reply)
